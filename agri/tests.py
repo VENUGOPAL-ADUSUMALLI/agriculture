@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -147,51 +148,49 @@ class OpenAIServiceSummaryParserTests(APITestCase):
 
 
 class OpenAIServicePredictionParserTests(APITestCase):
-    def test_normalize_legacy_prediction_accepts_valid_json(self):
+    def test_normalize_next5_prediction_accepts_valid_json(self):
         service = OpenAIService.__new__(OpenAIService)
-        latest_year = 2020
-        year_a = latest_year + 5
-        year_b = latest_year + 10
-        key_a = f'predicted_demand_{year_a}'
-        key_b = f'predicted_demand_{year_b}'
-        content = (
-            '{"' + key_a + '": 1000, "' + key_b + '": 1400, '
-            '"trend": "increasing", "confidence": 0.76, "analysis": "Rising steadily."}'
-        )
+        current_year = 2026
+        target_years = [2027, 2028, 2029, 2030, 2031]
+        content = json.dumps({
+            'trend': 'increasing',
+            'confidence': 0.76,
+            'analysis': 'Rising steadily.',
+            'forecast': [
+                {'year': y, 'predicted_demand_tonnes': 1000 + i * 100, 'confidence': 0.7, 'suggestion': 'Plan procurement'}
+                for i, y in enumerate(target_years)
+            ],
+        })
 
-        result = service._normalize_legacy_prediction(
+        result = service._normalize_next5_prediction(
             content=content,
             historical_data=[{'year': 2020, 'production': 900}],
-            latest_year=latest_year,
-            year_a=year_a,
-            year_b=year_b,
+            current_year=current_year,
+            target_years=target_years,
         )
 
-        self.assertEqual(result[key_a], 1000.0)
-        self.assertEqual(result[key_b], 1400.0)
+        self.assertEqual(result['current_year'], 2026)
         self.assertEqual(result['trend'], 'increasing')
         self.assertEqual(result['confidence'], 0.76)
+        self.assertEqual(len(result['forecast']), 5)
+        self.assertEqual(result['forecast'][0]['year'], 2027)
 
-    def test_normalize_legacy_prediction_fallback_on_invalid(self):
+    def test_normalize_next5_prediction_fallback_on_invalid(self):
         service = OpenAIService.__new__(OpenAIService)
-        latest_year = 2020
-        year_a = latest_year + 5
-        year_b = latest_year + 10
-        key_a = f'predicted_demand_{year_a}'
-        key_b = f'predicted_demand_{year_b}'
+        current_year = 2026
+        target_years = [2027, 2028, 2029, 2030, 2031]
 
-        result = service._normalize_legacy_prediction(
+        result = service._normalize_next5_prediction(
             content='not-json',
             historical_data=[{'year': 2020, 'production': 900}],
-            latest_year=latest_year,
-            year_a=year_a,
-            year_b=year_b,
+            current_year=current_year,
+            target_years=target_years,
         )
 
-        self.assertIn(key_a, result)
-        self.assertIn(key_b, result)
+        self.assertEqual(result['current_year'], 2026)
         self.assertIn(result['trend'], ['increasing', 'stable', 'decreasing'])
         self.assertLessEqual(result['confidence'], 1.0)
+        self.assertEqual(len(result['forecast']), 5)
 
 
 class PredictDemandApiTests(APITestCase):
@@ -207,11 +206,17 @@ class PredictDemandApiTests(APITestCase):
     @patch.object(OpenAIService, 'predict_demand')
     def test_predict_endpoint_returns_legacy_shape(self, mocked_predict):
         mocked_predict.return_value = {
-            'predicted_demand_2025': 100000.0,
-            'predicted_demand_2030': 130000.0,
+            'current_year': 2026,
             'trend': 'increasing',
             'confidence': 0.72,
             'analysis': 'Demand is increasing based on historical trend.',
+            'forecast': [
+                {'year': 2027, 'predicted_demand_tonnes': 100000.0, 'confidence': 0.71, 'suggestion': 'Increase buffer stock.'},
+                {'year': 2028, 'predicted_demand_tonnes': 103000.0, 'confidence': 0.7, 'suggestion': 'Increase buffer stock.'},
+                {'year': 2029, 'predicted_demand_tonnes': 106000.0, 'confidence': 0.69, 'suggestion': 'Increase buffer stock.'},
+                {'year': 2030, 'predicted_demand_tonnes': 109000.0, 'confidence': 0.68, 'suggestion': 'Increase buffer stock.'},
+                {'year': 2031, 'predicted_demand_tonnes': 112000.0, 'confidence': 0.67, 'suggestion': 'Increase buffer stock.'},
+            ],
         }
 
         response = self.client.get(reverse('api_predict', args=[self.crop.id]), {'state': self.state.id})
@@ -221,8 +226,64 @@ class PredictDemandApiTests(APITestCase):
         self.assertIn('trend', response.data['prediction'])
         self.assertIn('confidence', response.data['prediction'])
         self.assertIn('analysis', response.data['prediction'])
-        demand_keys = [k for k in response.data['prediction'].keys() if k.startswith('predicted_demand_')]
-        self.assertEqual(len(demand_keys), 2)
+        self.assertIn('current_year', response.data['prediction'])
+        self.assertIn('forecast', response.data['prediction'])
+        self.assertEqual(len(response.data['prediction']['forecast']), 5)
+
+
+class DemandSupplyInsightsApiTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='insights_user', password='secret123')
+        self.token = Token.objects.create(user=self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {self.token.key}')
+
+        self.state = State.objects.create(name='West Bengal')
+        self.district = District.objects.create(name='Nadia', state=self.state)
+        self.crop = Crop.objects.create(name='Rice', group='Cereals', typical_season='Kharif')
+
+        CropProduction.objects.create(
+            state=self.state,
+            district=self.district,
+            crop=self.crop,
+            crop_year=2014,
+            season='Kharif',
+            area=1000,
+            production=2500,
+        )
+        DemandSupply.objects.create(
+            crop_group='Cereals',
+            projected_demand_2020_21=108.0,
+            projected_supply_2016_17_low=98.0,
+            projected_supply_2016_17_high=106.0,
+        )
+        CropPrice.objects.create(
+            crop=self.crop,
+            state=self.state,
+            year=2024,
+            price_per_tonne=18500,
+            source='MSP',
+        )
+
+    @patch.object(OpenAIService, 'generate_surplus_deficit_insight')
+    def test_demand_supply_insights_endpoint(self, mocked_insight):
+        mocked_insight.return_value = (
+            'Is Rice in surplus or deficit nationally? — '
+            'Projected demand is 108M tonnes vs supply 98-106M tonnes, '
+            'so Rice might be slightly short nationally; better act fast.'
+        )
+        response = self.client.get('/api/v1/demand-supply/insights/?crop=Rice')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['crop']['name'], 'Rice')
+        self.assertEqual(response.data['production_insight']['data_year'], 2014)
+        self.assertTrue(response.data['production_insight']['top_states'])
+        self.assertEqual(response.data['demand_supply_insight']['balance_status'], 'deficit')
+        self.assertIn('Is Rice in surplus or deficit nationally?', response.data['ai_prediction'])
+        self.assertEqual(response.data['price_insight']['price_year'], 2024)
+
+    def test_demand_supply_insights_requires_crop_param(self):
+        response = self.client.get('/api/v1/demand-supply/insights/')
+        self.assertEqual(response.status_code, 400)
 
     @patch.object(OpenAIService, 'predict_demand', side_effect=RuntimeError('OpenAI unavailable'))
     def test_predict_endpoint_failure_still_returns_legacy_shape(self, mocked_predict):
@@ -233,5 +294,6 @@ class PredictDemandApiTests(APITestCase):
         self.assertIn('trend', response.data['prediction'])
         self.assertIn('confidence', response.data['prediction'])
         self.assertIn('analysis', response.data['prediction'])
-        demand_keys = [k for k in response.data['prediction'].keys() if k.startswith('predicted_demand_')]
-        self.assertEqual(len(demand_keys), 2)
+        self.assertIn('current_year', response.data['prediction'])
+        self.assertIn('forecast', response.data['prediction'])
+        self.assertEqual(len(response.data['prediction']['forecast']), 5)

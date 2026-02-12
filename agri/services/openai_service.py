@@ -144,89 +144,115 @@ Rules:
         }
 
     def predict_demand(self, crop_name, state_name, historical_data):
-        latest_year = max((item.get('year', 0) for item in historical_data), default=datetime.now().year)
-        year_a = latest_year + 5
-        year_b = latest_year + 10
-        key_a = f"predicted_demand_{year_a}"
-        key_b = f"predicted_demand_{year_b}"
+        current_year = datetime.now().year
+        target_years = [current_year + i for i in range(1, 6)]
 
-        prompt = f"""Based on this historical production data for {crop_name} in {state_name}:
+        prompt = f"""You are forecasting agricultural demand for policy planning.
+Current year: {current_year}
+Crop: {crop_name}
+State scope: {state_name}
 
+Historical production data:
 {json.dumps(historical_data, indent=2)}
 
-Predict demand/procurement requirement in tonnes for years {year_a} and {year_b}.
-Return ONLY valid JSON in this exact format:
+Return ONLY valid JSON in this exact schema:
 {{
-  "{key_a}": <number>,
-  "{key_b}": <number>,
   "trend": "<increasing|stable|decreasing>",
   "confidence": <number between 0 and 1>,
-  "analysis": "<short paragraph>"
+  "analysis": "<concise paragraph>",
+  "forecast": [
+    {{
+      "year": <int>,
+      "predicted_demand_tonnes": <number>,
+      "confidence": <number between 0 and 1>,
+      "suggestion": "<short action-oriented suggestion>"
+    }}
+  ]
 }}
 Rules:
+- Forecast must have exactly 5 entries for years: {target_years}.
+- Use one entry per year.
 - No markdown.
-- No extra keys.
-- confidence must be numeric between 0 and 1."""
+- No extra keys."""
 
         response = self.client.chat.completions.create(
             model=self.MODEL_NAME,
             messages=[
-                {"role": "system", "content": "You are an agricultural data scientist. Return only valid JSON."},
+                {"role": "system", "content": "You are an agricultural forecasting expert. Return only valid JSON."},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=400,
+            max_tokens=700,
             temperature=0.3,
         )
 
         content = response.choices[0].message.content or ""
-        return self._normalize_legacy_prediction(
+        return self._normalize_next5_prediction(
             content=content,
             historical_data=historical_data,
-            latest_year=latest_year,
-            year_a=year_a,
-            year_b=year_b,
+            current_year=current_year,
+            target_years=target_years,
         )
 
-    def _normalize_legacy_prediction(self, content, historical_data, latest_year, year_a, year_b):
-        key_a = f"predicted_demand_{year_a}"
-        key_b = f"predicted_demand_{year_b}"
+    def _normalize_next5_prediction(self, content, historical_data, current_year, target_years):
+        def normalize_trend(value):
+            v = str(value).strip().lower()
+            if v in {'increasing', 'stable', 'decreasing'}:
+                return v
+            return 'stable'
+
+        def clamp_confidence(value, default=0.5):
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                parsed = default
+            return round(max(0.0, min(1.0, parsed)), 2)
 
         try:
             parsed = self._extract_json(content)
-            demand_a = max(0.0, float(parsed[key_a]))
-            demand_b = max(0.0, float(parsed[key_b]))
-            trend = str(parsed.get('trend', 'stable')).strip().lower()
-            if trend not in {'increasing', 'stable', 'decreasing'}:
-                trend = 'stable'
-            confidence = float(parsed.get('confidence', 0.5))
-            confidence = max(0.0, min(1.0, confidence))
-            analysis = str(parsed.get('analysis', '')).strip()[:1200]
-            if not analysis:
-                raise ValueError("analysis missing")
+            forecast = parsed.get('forecast')
+            if not isinstance(forecast, list):
+                raise ValueError("forecast must be a list")
+
+            by_year = {}
+            for item in forecast:
+                if not isinstance(item, dict):
+                    continue
+                year = int(item.get('year'))
+                if year not in target_years:
+                    continue
+                by_year[year] = {
+                    'year': year,
+                    'predicted_demand_tonnes': round(max(0.0, float(item.get('predicted_demand_tonnes'))), 2),
+                    'confidence': clamp_confidence(item.get('confidence'), default=parsed.get('confidence', 0.5)),
+                    'suggestion': str(item.get('suggestion', '')).strip()[:220] or "Monitor supply-demand gap and prepare procurement early.",
+                }
+
+            if len(by_year) != len(target_years):
+                raise ValueError("forecast does not cover all target years")
+
             return {
-                key_a: round(demand_a, 2),
-                key_b: round(demand_b, 2),
-                'trend': trend,
-                'confidence': round(confidence, 2),
-                'analysis': analysis,
+                'current_year': current_year,
+                'trend': normalize_trend(parsed.get('trend', 'stable')),
+                'confidence': clamp_confidence(parsed.get('confidence', 0.5)),
+                'analysis': str(parsed.get('analysis', '')).strip()[:1200] or 'AI-generated outlook based on historical production trends.',
+                'forecast': [by_year[year] for year in target_years],
             }
         except Exception:
-            logger.exception("Failed to parse AI demand prediction, using fallback.")
-            return self._fallback_legacy_prediction(
+            logger.exception("Failed to parse AI 5-year demand prediction, using fallback.")
+            return self._fallback_next5_prediction(
                 historical_data=historical_data,
-                latest_year=latest_year,
-                year_a=year_a,
-                year_b=year_b,
+                current_year=current_year,
+                target_years=target_years,
             )
 
     @staticmethod
-    def _fallback_legacy_prediction(historical_data, latest_year, year_a, year_b):
-        key_a = f"predicted_demand_{year_a}"
-        key_b = f"predicted_demand_{year_b}"
+    def _fallback_next5_prediction(historical_data, current_year, target_years):
         production_points = [
             float(item.get('production')) for item in historical_data
             if item.get('production') is not None
         ]
+        latest_year = max((item.get('year', current_year) for item in historical_data), default=current_year)
+
         if not production_points:
             baseline = 0.0
             growth = 0.0
@@ -241,26 +267,36 @@ Rules:
             else:
                 growth = max(-0.15, min(0.15, (baseline - prev) / prev))
 
-        years_to_a = max(1, year_a - latest_year)
-        years_to_b = max(1, year_b - latest_year)
-        demand_a = baseline * ((1 + growth) ** years_to_a)
-        demand_b = baseline * ((1 + growth) ** years_to_b)
         if growth > 0.01:
             trend = 'increasing'
+            suggestion = "Strengthen procurement planning and storage capacity."
         elif growth < -0.01:
             trend = 'decreasing'
+            suggestion = "Plan early procurement and consider demand-side rationing buffers."
         else:
             trend = 'stable'
+            suggestion = "Maintain current procurement strategy with periodic monitoring."
+
+        forecast = []
+        for year in target_years:
+            years_from_baseline = max(1, year - latest_year)
+            demand = baseline * ((1 + growth) ** years_from_baseline)
+            forecast.append({
+                'year': year,
+                'predicted_demand_tonnes': round(max(0.0, demand), 2),
+                'confidence': 0.35,
+                'suggestion': suggestion,
+            })
 
         return {
-            key_a: round(max(0.0, demand_a), 2),
-            key_b: round(max(0.0, demand_b), 2),
+            'current_year': current_year,
             'trend': trend,
             'confidence': 0.35,
             'analysis': (
-                "Fallback estimate generated from recent historical production trend "
-                "because the AI response was unavailable or invalid."
+                "Fallback 5-year forecast generated from historical production trend "
+                "because AI response was unavailable or invalid."
             ),
+            'forecast': forecast,
         }
 
     def estimate_crop_price(self, crop_name, state_name):
@@ -280,3 +316,30 @@ Only return the JSON."""
         )
 
         return json.loads(response.choices[0].message.content)
+
+    def generate_surplus_deficit_insight(self, crop_name, demand, supply_low, supply_high):
+        prompt = f"""You are a policy analyst for Indian agriculture.
+
+Crop: {crop_name}
+Projected demand (million tonnes): {demand}
+Projected supply range (million tonnes): {supply_low} to {supply_high}
+
+Write one concise plain-text insight in this style:
+"Is {crop_name} in surplus or deficit nationally? — ... better act fast."
+
+Rules:
+- 1 to 2 sentences only.
+- Mention demand and supply numbers.
+- Clearly state surplus/deficit/tight balance.
+- No markdown."""
+
+        response = self.client.chat.completions.create(
+            model=self.MODEL_NAME,
+            messages=[
+                {"role": "system", "content": "You provide crisp, actionable policy insights."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=140,
+            temperature=0.2,
+        )
+        return (response.choices[0].message.content or "").strip()

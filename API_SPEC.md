@@ -457,6 +457,70 @@ GET /api/v1/demand-supply/
 
 ---
 
+### 2.8.1 Demand-Supply Insights (Crop-level)
+
+Get a single actionable insight pack for a crop by combining:
+- latest production landscape by state,
+- national demand-supply signal,
+- latest state-wise price picture,
+- AI narrative on surplus/deficit urgency.
+
+```
+GET /api/v1/demand-supply/insights/?crop={crop_name}
+```
+
+**Auth Required:** Yes
+
+**Query Parameters:**
+
+| Param  | Type   | Required | Description                     |
+|--------|--------|----------|---------------------------------|
+| `crop` | string | Yes      | Crop name (e.g., `Rice`)        |
+
+**Example:** `GET /api/v1/demand-supply/insights/?crop=Rice`
+
+**Response:** `200 OK`
+```json
+{
+  "crop": {
+    "id": 15,
+    "name": "Rice",
+    "group": "Cereals",
+    "typical_season": "Kharif"
+  },
+  "production_insight": {
+    "data_year": 2014,
+    "national_production_tonnes": 104800000.0,
+    "top_states": [
+      { "state": "West Bengal", "production_tonnes": 14800000.0 },
+      { "state": "Uttar Pradesh", "production_tonnes": 12800000.0 }
+    ]
+  },
+  "demand_supply_insight": {
+    "crop_group": "Cereals",
+    "projected_demand_million_tonnes": 108.0,
+    "projected_supply_low_million_tonnes": 98.0,
+    "projected_supply_high_million_tonnes": 106.0,
+    "balance_status": "deficit"
+  },
+  "ai_prediction": "Is Rice in surplus or deficit nationally? — Projected demand is 108M tonnes vs projected supply 98–106M tonnes, so Rice might be slightly short nationally; better act fast.",
+  "price_insight": {
+    "price_year": 2024,
+    "average_price_per_tonne_inr": 19240.33,
+    "state_prices": [
+      { "state": "Punjab", "price_per_tonne_inr": 18500.0 },
+      { "state": "Haryana", "price_per_tonne_inr": 19200.0 }
+    ]
+  }
+}
+```
+
+**Error Responses:**
+- `400 Bad Request` when `crop` query parameter is missing
+- `404 Not Found` when crop name is not found
+
+---
+
 ### 2.9 List Crop Prices
 
 MSP-based price data per crop per state.
@@ -539,7 +603,7 @@ POST /api/v1/optimize/
 **Success Response:** `201 Created`
 ```json
 {
-  "id": 1,
+  "id": "8f57e5c1-5320-4fcb-b8cd-4f6f3d3cf8a9",
   "crop_name": "Rice",
   "state_name": "Telangana",
   "district_name": "Hyderabad",
@@ -551,6 +615,8 @@ POST /api/v1/optimize/
       "id": 1,
       "supplier_state_name": "Andhra Pradesh",
       "available_supply_tonnes": 12500000.0,
+      "base_price_per_tonne": "22520.50",
+      "transport_cost_per_tonne": "625.00",
       "price_per_tonne": "23145.50",
       "transportation_cost": "312500.00",
       "total_cost": "11885250.00",
@@ -611,7 +677,7 @@ POST /api/v1/optimize/
 
 | Field                    | Type    | Description                                         |
 |--------------------------|---------|-----------------------------------------------------|
-| `id`                     | int     | Unique query ID (use for /results/ endpoint)        |
+| `id`                     | UUID    | Public query identifier (use for `/results/{uuid}/`)|
 | `crop_name`              | string  | Name of the requested crop                          |
 | `state_name`             | string  | Buyer's state                                       |
 | `district_name`          | string  | Buyer's district                                    |
@@ -626,7 +692,9 @@ POST /api/v1/optimize/
 |--------------------------|---------|----------|----------------------------------------------------------|
 | `supplier_state_name`    | string  | —        | Name of the supplier state                               |
 | `available_supply_tonnes`| float   | tonnes   | Total production available in that state                 |
-| `price_per_tonne`        | decimal | INR      | Crop price per tonne in the supplier state               |
+| `base_price_per_tonne`   | decimal | INR      | Raw crop price per tonne in supplier state               |
+| `transport_cost_per_tonne`| decimal| INR      | Transport cost apportioned per tonne                     |
+| `price_per_tonne`        | decimal | INR      | Landed/effective per-tonne price (base + transport/tonne)|
 | `transportation_cost`    | decimal | INR      | Road: distance × ₹2.50/km/tonne × qty. Rail: slab rate × qty |
 | `total_cost`             | decimal | INR      | (price × quantity) + transportation_cost                 |
 | `distance_km`            | float   | km       | Road distance from supplier to buyer (Google Maps)       |
@@ -645,12 +713,12 @@ POST /api/v1/optimize/
 
 ---
 
-### 3.2 Get Query Results (with AI Summary)
+### 3.2 Get Query Results (with Cached AI Summary)
 
-Retrieve detailed results for a previous procurement query, including an AI-generated recommendation summary.
+Retrieve detailed results for a previous procurement query, including a cached AI summary.
 
 ```
-GET /api/v1/results/{query_id}/
+GET /api/v1/results/{query_uuid}/
 ```
 
 **Auth Required:** Yes
@@ -659,12 +727,12 @@ GET /api/v1/results/{query_id}/
 
 | Param      | Type | Description                              |
 |------------|------|------------------------------------------|
-| `query_id` | int  | ID of the procurement query (from /optimize/) |
+| `query_uuid` | UUID | Query UUID returned as `id` from `/optimize/` |
 
 **Response:** `200 OK`
 ```json
 {
-  "id": 1,
+  "id": "8f57e5c1-5320-4fcb-b8cd-4f6f3d3cf8a9",
   "crop_name": "Rice",
   "state_name": "Telangana",
   "district_name": "Hyderabad",
@@ -675,6 +743,8 @@ GET /api/v1/results/{query_id}/
       "id": 1,
       "supplier_state_name": "Andhra Pradesh",
       "available_supply_tonnes": 12500000.0,
+      "base_price_per_tonne": "22520.50",
+      "transport_cost_per_tonne": "625.00",
       "price_per_tonne": "23145.50",
       "transportation_cost": "312500.00",
       "total_cost": "11885250.00",
@@ -685,13 +755,23 @@ GET /api/v1/results/{query_id}/
       "ranking_score": 0.0
     }
   ],
-  "ai_summary": "Based on the analysis, procuring Rice from Andhra Pradesh is the optimal choice for Telangana. At a total cost of INR 1,18,85,250 for 500 tonnes, it offers the lowest cost, fastest delivery (1.3 days), and smallest carbon footprint (7,750 kg CO2). The proximity of Andhra Pradesh (250 km) provides significant savings of INR 11,89,750 compared to sourcing from Bihar. For a balanced approach considering all three factors, Andhra Pradesh scores 0.0 on the weighted ranking scale, making it the clear recommendation."
+  "ai_summary": {
+    "headline": "Best procurement strategy for Rice in Telangana",
+    "points": [
+      {"title": "Best cost option", "detail": "Andhra Pradesh by rail is lowest total cost."},
+      {"title": "Fastest option", "detail": "Andhra Pradesh by road delivers in about 1.3 days."}
+    ],
+    "generated_at": "2026-02-12T17:05:00.000000+05:30",
+    "model": "gpt-4o-mini"
+  },
+  "ai_summary_source": "cache"
 }
 ```
 
 **Notes:**
-- `ai_summary` is generated by OpenAI (GPT-4o-mini) on each request
-- If OpenAI is unavailable, `ai_summary` will be `null`
+- On first fetch for a query, summary is generated and stored.
+- Subsequent fetches return stored summary from DB (`ai_summary_source: "cache"`).
+- If generation fails, `ai_summary` is `null` and `ai_summary_source` is `"unavailable"`.
 - Only returns queries belonging to the authenticated user
 
 **Error Response:** `404 Not Found`
@@ -717,7 +797,7 @@ GET /api/v1/history/
 ```json
 [
   {
-    "id": 3,
+    "id": "f8c2a6c8-cd08-4d64-8c20-2774ad4a2403",
     "crop_name": "Wheat",
     "state_name": "Maharashtra",
     "district_name": "Pune",
@@ -727,7 +807,7 @@ GET /api/v1/history/
     "results": [...]
   },
   {
-    "id": 1,
+    "id": "8f57e5c1-5320-4fcb-b8cd-4f6f3d3cf8a9",
     "crop_name": "Rice",
     "state_name": "Telangana",
     "district_name": "Hyderabad",
@@ -806,9 +886,9 @@ GET /api/v1/crop-availability/?crop={crop_id}
 
 ---
 
-### 3.5 AI Demand Prediction
+### 3.5 AI Demand Prediction (Next 5 Years from Current Year)
 
-Get AI-powered demand predictions for a crop, optionally filtered by state.
+Get AI-powered demand predictions for the next 5 calendar years from the current year.
 
 ```
 GET /api/v1/predict/{crop_id}/
@@ -848,22 +928,49 @@ GET /api/v1/predict/{crop_id}/
     { "year": 2014, "production": 12543210.0, "area": 3890250.0 }
   ],
   "prediction": {
-    "predicted_demand_2019": 13200000.0,
-    "predicted_demand_2024": 13650000.0,
+    "current_year": 2026,
     "trend": "increasing",
     "confidence": 0.72,
-    "analysis": "Rice production has shown a steady upward trend, so demand is expected to remain strong over the next decade."
+    "analysis": "Demand is likely to increase due to sustained production and consumption momentum.",
+    "forecast": [
+      {
+        "year": 2027,
+        "predicted_demand_tonnes": 13050000.0,
+        "confidence": 0.71,
+        "suggestion": "Secure procurement contracts early for peak season."
+      },
+      {
+        "year": 2028,
+        "predicted_demand_tonnes": 13320000.0,
+        "confidence": 0.70,
+        "suggestion": "Expand storage and transport readiness."
+      },
+      {
+        "year": 2029,
+        "predicted_demand_tonnes": 13600000.0,
+        "confidence": 0.69,
+        "suggestion": "Monitor monsoon-sensitive districts for early warning."
+      },
+      {
+        "year": 2030,
+        "predicted_demand_tonnes": 13870000.0,
+        "confidence": 0.68,
+        "suggestion": "Diversify suppliers to reduce concentration risk."
+      },
+      {
+        "year": 2031,
+        "predicted_demand_tonnes": 14150000.0,
+        "confidence": 0.67,
+        "suggestion": "Build buffer inventory for demand spikes."
+      }
+    ]
   }
 }
 ```
 
 **Notes:**
-- `prediction` always contains exactly:
-  - two dynamic keys: `predicted_demand_<yearA>` and `predicted_demand_<yearB>`
-  - `trend`, `confidence`, `analysis`
-- Dynamic year keys are derived from latest historical year:
-  - `yearA = latest_historical_year + 5`
-  - `yearB = latest_historical_year + 10`
+- `prediction.forecast` always contains exactly 5 entries: current_year+1 to current_year+5.
+- Each forecast row includes a year, predicted demand, confidence, and action suggestion.
 - If OpenAI is unavailable or returns invalid JSON, API still returns same shape using backend fallback estimates.
 - Historical data is always returned regardless of AI availability.
 - Without `state` parameter, returns aggregated all-India data
@@ -922,7 +1029,7 @@ Step 3: GET  /api/v1/districts/?state=15 → Show district dropdown (after state
 Step 4: GET  /api/v1/crops/              → Show crop dropdown
 Step 5: GET  /api/v1/crop-availability/?crop=15  → Show which states have this crop
 Step 6: POST /api/v1/optimize/           → Submit procurement request, get ranked results
-Step 7: GET  /api/v1/results/1/          → Get detailed results with AI recommendation
+Step 7: GET  /api/v1/results/{query_uuid}/ → Get detailed results with cached AI recommendation
 Step 8: GET  /api/v1/impact/             → View cumulative savings dashboard
 ```
 

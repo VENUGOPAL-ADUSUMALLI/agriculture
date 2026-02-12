@@ -1,5 +1,5 @@
 from rest_framework import viewsets, status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
@@ -181,6 +181,155 @@ class DemandSupplyViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = DemandSupply.objects.all()
     serializer_class = DemandSupplySerializer
 
+    @action(detail=False, methods=['get'], url_path='insights')
+    def insights(self, request):
+        crop_name = request.query_params.get('crop')
+        if not crop_name:
+            return Response(
+                {'error': 'crop query parameter required (example: ?crop=Rice)'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        crop = Crop.objects.filter(name__iexact=crop_name).first()
+        if not crop:
+            return Response(
+                {'error': 'Crop not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        latest_year = CropProduction.objects.filter(
+            crop=crop
+        ).aggregate(max_year=Max('crop_year'))['max_year']
+
+        top_states = []
+        national_production = None
+        if latest_year:
+            top_states_qs = CropProduction.objects.filter(
+                crop=crop,
+                crop_year=latest_year,
+            ).values(
+                'state__name'
+            ).annotate(
+                total_production=Sum('production')
+            ).order_by('-total_production')[:10]
+
+            top_states = [
+                {
+                    'state': row['state__name'],
+                    'production_tonnes': round(float(row['total_production'] or 0), 2),
+                }
+                for row in top_states_qs
+            ]
+
+            national_production = CropProduction.objects.filter(
+                crop=crop,
+                crop_year=latest_year,
+            ).aggregate(total=Sum('production'))['total']
+            national_production = round(float(national_production or 0), 2)
+
+        ds_record = None
+        if crop.group:
+            ds_record = DemandSupply.objects.filter(
+                crop_group__iexact=crop.group
+            ).first()
+        if not ds_record:
+            ds_record = DemandSupply.objects.filter(
+                crop_group__icontains='cereal'
+            ).first()
+
+        demand_supply_insight = None
+        ai_prediction = None
+        if ds_record:
+            demand = ds_record.projected_demand_2020_21
+            supply_low = ds_record.projected_supply_2016_17_low
+            supply_high = ds_record.projected_supply_2016_17_high
+
+            balance_status = 'unknown'
+            if demand is not None and supply_low is not None and supply_high is not None:
+                if supply_high < demand:
+                    balance_status = 'deficit'
+                elif supply_low > demand:
+                    balance_status = 'surplus'
+                else:
+                    balance_status = 'tight_balance'
+
+            demand_supply_insight = {
+                'crop_group': ds_record.crop_group,
+                'projected_demand_million_tonnes': demand,
+                'projected_supply_low_million_tonnes': supply_low,
+                'projected_supply_high_million_tonnes': supply_high,
+                'balance_status': balance_status,
+            }
+            if demand is not None and supply_low is not None and supply_high is not None:
+                try:
+                    ai_service = OpenAIService()
+                    ai_prediction = ai_service.generate_surplus_deficit_insight(
+                        crop_name=crop.name,
+                        demand=demand,
+                        supply_low=supply_low,
+                        supply_high=supply_high,
+                    )
+                except Exception:
+                    if balance_status == 'deficit':
+                        status_text = 'might be slightly short nationally'
+                    elif balance_status == 'surplus':
+                        status_text = 'appears to be in surplus nationally'
+                    elif balance_status == 'tight_balance':
+                        status_text = 'looks tightly balanced nationally'
+                    else:
+                        status_text = 'has uncertain national balance'
+
+                    ai_prediction = (
+                        f"Is {crop.name} in surplus or deficit nationally? — "
+                        f"Projected demand is {demand}M tonnes vs projected supply "
+                        f"{supply_low}-{supply_high}M tonnes, so {crop.name} {status_text}; "
+                        f"better act fast."
+                    )
+
+        latest_price_year = CropPrice.objects.filter(
+            crop=crop
+        ).aggregate(max_year=Max('year'))['max_year']
+
+        state_prices = []
+        avg_price = None
+        if latest_price_year:
+            prices_qs = CropPrice.objects.filter(
+                crop=crop,
+                year=latest_price_year,
+            ).values(
+                'state__name', 'price_per_tonne'
+            ).order_by('price_per_tonne')
+
+            state_prices = [
+                {
+                    'state': row['state__name'],
+                    'price_per_tonne_inr': float(row['price_per_tonne']),
+                }
+                for row in prices_qs
+            ]
+
+            if state_prices:
+                avg_price = round(
+                    sum(p['price_per_tonne_inr'] for p in state_prices) / len(state_prices),
+                    2,
+                )
+
+        return Response({
+            'crop': CropSerializer(crop).data,
+            'production_insight': {
+                'data_year': latest_year,
+                'national_production_tonnes': national_production,
+                'top_states': top_states,
+            },
+            'demand_supply_insight': demand_supply_insight,
+            'ai_prediction': ai_prediction,
+            'price_insight': {
+                'price_year': latest_price_year,
+                'average_price_per_tonne_inr': avg_price,
+                'state_prices': state_prices,
+            },
+        })
+
 
 class CropPriceViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = CropPriceSerializer
@@ -347,15 +496,22 @@ def predict_demand(request, crop_id):
         prediction = ai_service.predict_demand(
             crop.name, state_name, historical_data)
     except Exception as e:
-        latest_year = max((item['year'] for item in historical_data), default=timezone.now().year)
-        year_a = latest_year + 5
-        year_b = latest_year + 10
+        current_year = timezone.now().year
+        target_years = [current_year + i for i in range(1, 6)]
         prediction = {
-            f'predicted_demand_{year_a}': 0.0,
-            f'predicted_demand_{year_b}': 0.0,
+            'current_year': current_year,
             'trend': 'stable',
             'confidence': 0.35,
             'analysis': f'Fallback prediction used due to service error: {str(e)}',
+            'forecast': [
+                {
+                    'year': year,
+                    'predicted_demand_tonnes': 0.0,
+                    'confidence': 0.35,
+                    'suggestion': 'Check data quality and retry AI forecast.',
+                }
+                for year in target_years
+            ],
         }
 
     return Response({
