@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from decimal import Decimal, ROUND_HALF_UP
 from django.contrib.auth.models import User
 from agri.models import (
     State, District, Crop, CropProduction, DemandSupply,
@@ -60,12 +61,47 @@ class CropPriceSerializer(serializers.ModelSerializer):
 class ProcurementResultSerializer(serializers.ModelSerializer):
     supplier_state_name = serializers.CharField(
         source='supplier_state.name', read_only=True)
+    price_per_tonne = serializers.SerializerMethodField()
+    base_price_per_tonne = serializers.SerializerMethodField()
+    transport_cost_per_tonne = serializers.SerializerMethodField()
+
+    @staticmethod
+    def _format_money(val):
+        return str(Decimal(str(val)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
+    @staticmethod
+    def _fulfilled_quantity(obj):
+        return max(0.0, min(
+            float(obj.available_supply_tonnes),
+            float(obj.query.required_quantity_tonnes),
+        ))
+
+    def get_base_price_per_tonne(self, obj):
+        return self._format_money(obj.price_per_tonne)
+
+    def get_transport_cost_per_tonne(self, obj):
+        qty = self._fulfilled_quantity(obj)
+        if qty <= 0:
+            return None
+        return self._format_money(Decimal(str(obj.transportation_cost)) / Decimal(str(qty)))
+
+    def get_price_per_tonne(self, obj):
+        """
+        Return landed price per tonne (base + transport/tonne) so
+        road and rail values are naturally mode-specific in API output.
+        """
+        qty = self._fulfilled_quantity(obj)
+        if qty <= 0:
+            return self._format_money(obj.price_per_tonne)
+        landed = Decimal(str(obj.total_cost)) / Decimal(str(qty))
+        return self._format_money(landed)
 
     class Meta:
         model = ProcurementResult
         fields = [
             'id', 'supplier_state_name', 'available_supply_tonnes',
-            'price_per_tonne', 'transportation_cost', 'total_cost',
+            'base_price_per_tonne', 'transport_cost_per_tonne', 'price_per_tonne',
+            'transportation_cost', 'total_cost',
             'distance_km', 'estimated_delivery_days', 'carbon_footprint_kg',
             'transport_mode', 'ranking_category', 'ranking_score',
         ]

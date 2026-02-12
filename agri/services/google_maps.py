@@ -71,12 +71,20 @@ class GoogleMapsService:
             element = result['rows'][0]['elements'][0]
 
             if element['status'] != 'OK':
+                if transport_mode == 'rail':
+                    road_fallback = self._fallback_from_road_matrix(origin_str, dest_str)
+                    if road_fallback:
+                        return road_fallback
                 return self._fallback_estimate(origin_state, dest_state, transport_mode)
 
             distance_km = element['distance']['value'] / 1000
             duration_hours = element['duration']['value'] / 3600
 
         except Exception:
+            if transport_mode == 'rail':
+                road_fallback = self._fallback_from_road_matrix(origin_str, dest_str)
+                if road_fallback:
+                    return road_fallback
             return self._fallback_estimate(origin_state, dest_state, transport_mode)
 
         DistanceCache.objects.update_or_create(
@@ -96,6 +104,32 @@ class GoogleMapsService:
             'duration_hours': duration_hours,
             'transport_mode': transport_mode,
         }
+
+    def _fallback_from_road_matrix(self, origin_str, dest_str):
+        """
+        If rail transit route is unavailable, derive a route-specific rail estimate
+        from driving distance so different routes do not collapse to one constant.
+        """
+        try:
+            road_result = self.client.distance_matrix(
+                origins=[origin_str],
+                destinations=[dest_str],
+                mode='driving',
+                units='metric',
+            )
+            road_element = road_result['rows'][0]['elements'][0]
+            if road_element['status'] != 'OK':
+                return None
+            road_km = road_element['distance']['value'] / 1000
+            rail_km = round(road_km * 0.92, 3)
+            rail_hours = round(rail_km / 35, 2)
+            return {
+                'distance_km': rail_km,
+                'duration_hours': rail_hours,
+                'transport_mode': 'rail',
+            }
+        except Exception:
+            return None
 
     def _fallback_estimate(self, origin_state, dest_state, transport_mode):
         if not all([
