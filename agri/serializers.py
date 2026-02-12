@@ -112,11 +112,12 @@ class ProcurementQuerySerializer(serializers.ModelSerializer):
     crop_name = serializers.CharField(source='crop.name', read_only=True)
     state_name = serializers.CharField(source='source_state.name', read_only=True)
     district_name = serializers.CharField(source='source_district.name', read_only=True)
+    query_uuid = serializers.UUIDField(source='public_id', read_only=True)
 
     class Meta:
         model = ProcurementQuery
         fields = [
-            'id', 'crop_name', 'state_name', 'district_name',
+            'id', 'query_uuid', 'crop_name', 'state_name', 'district_name',
             'required_quantity_tonnes', 'transport_mode', 'created_at', 'results',
         ]
 

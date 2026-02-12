@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+import uuid
 
 
 class State(models.Model):
@@ -124,6 +125,7 @@ class ProcurementQuery(models.Model):
         ('both', 'Both Road & Rail'),
     ]
 
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, db_index=True, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='queries')
     crop = models.ForeignKey(Crop, on_delete=models.CASCADE)
     source_state = models.ForeignKey(State, on_delete=models.CASCADE, related_name='procurement_queries')

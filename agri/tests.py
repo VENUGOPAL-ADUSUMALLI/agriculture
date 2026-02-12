@@ -56,7 +56,7 @@ class ResultsAISummaryCachingTests(APITestCase):
         }
 
         with patch.object(OpenAIService, 'generate_procurement_summary', return_value=summary_payload) as mocked:
-            response = self.client.get(reverse('api_results', args=[self.query.id]))
+            response = self.client.get(reverse('api_results', args=[self.query.public_id]))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['ai_summary_source'], 'generated')
@@ -80,7 +80,7 @@ class ResultsAISummaryCachingTests(APITestCase):
         self.query.save(update_fields=['ai_summary_json', 'ai_summary_model'])
 
         with patch.object(OpenAIService, 'generate_procurement_summary') as mocked:
-            response = self.client.get(reverse('api_results', args=[self.query.id]))
+            response = self.client.get(reverse('api_results', args=[self.query.public_id]))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['ai_summary_source'], 'cache')
@@ -89,7 +89,7 @@ class ResultsAISummaryCachingTests(APITestCase):
 
     def test_results_openai_failure_returns_unavailable(self):
         with patch.object(OpenAIService, 'generate_procurement_summary', side_effect=RuntimeError('OpenAI down')):
-            response = self.client.get(reverse('api_results', args=[self.query.id]))
+            response = self.client.get(reverse('api_results', args=[self.query.public_id]))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['ai_summary_source'], 'unavailable')
@@ -108,7 +108,7 @@ class ResultsAISummaryCachingTests(APITestCase):
             transport_mode='road',
         )
 
-        get_response = self.client.get(reverse('api_results', args=[other_query.id]))
+        get_response = self.client.get(reverse('api_results', args=[other_query.public_id]))
 
         self.assertEqual(get_response.status_code, 404)
 

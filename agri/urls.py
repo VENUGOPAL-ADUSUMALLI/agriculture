@@ -19,7 +19,7 @@ urlpatterns = [
     # Core business
     path('optimize/', views.optimize_procurement, name='api_optimize'),
     path('history/', views.query_history, name='api_history'),
-    path('results/<int:query_id>/', views.query_results, name='api_results'),
+    path('results/<uuid:query_uuid>/', views.query_results, name='api_results'),
     path('crop-availability/', views.crop_availability, name='api_crop_availability'),
     path('predict/<int:crop_id>/', views.predict_demand, name='api_predict'),
     path('impact/', views.impact_dashboard, name='api_impact'),

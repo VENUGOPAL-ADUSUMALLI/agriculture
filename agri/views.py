@@ -236,9 +236,9 @@ def query_history(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def query_results(request, query_id):
+def query_results(request, query_uuid):
     try:
-        query = ProcurementQuery.objects.get(id=query_id, user=request.user)
+        query = ProcurementQuery.objects.get(public_id=query_uuid, user=request.user)
     except ProcurementQuery.DoesNotExist:
         return Response(
             {'error': 'Query not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -248,7 +248,7 @@ def query_results(request, query_id):
     if not query.ai_summary_json:
         with transaction.atomic():
             locked_query = ProcurementQuery.objects.select_for_update().get(
-                id=query_id, user=request.user
+                public_id=query_uuid, user=request.user
             )
             locked_query, summary_source = _generate_and_store_summary(locked_query)
             query = locked_query
@@ -345,17 +345,21 @@ def predict_demand(request, crop_id):
     try:
         ai_service = OpenAIService()
         prediction = ai_service.predict_demand(
-            crop.name, state_name, historical_data)
+            crop.name, state_name, historical_data, years=5)
     except Exception as e:
         prediction = {
             'error': f'Prediction unavailable: {str(e)}',
-            'historical_data': historical_data,
+            'years_requested': 5,
+            'overall_confidence': 'low',
+            'assumptions': ['Prediction failed due to upstream AI/service error.'],
+            'forecast': [],
         }
 
     return Response({
         'crop': CropSerializer(crop).data,
         'state': state_name,
         'historical_data': historical_data,
+        'prediction_horizon_years': 5,
         'prediction': prediction,
     })
 
