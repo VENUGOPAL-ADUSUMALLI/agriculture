@@ -23,6 +23,7 @@ urlpatterns = [
     path('crop-availability/', views.crop_availability, name='api_crop_availability'),
     path('predict/<int:crop_id>/', views.predict_demand, name='api_predict'),
     path('impact/', views.impact_dashboard, name='api_impact'),
+    path('dashboard/', views.dashboard_view, name='api_dashboard'),
 
     # ViewSet routes
     path('', include(router.urls)),

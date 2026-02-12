@@ -349,3 +349,35 @@ def impact_dashboard(request):
         'carbon_saved_kg': carbon_saved,
         'recent_queries': recent,
     })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def dashboard_view(request):
+    demand_supply = DemandSupply.objects.all()
+    gap_data = []
+    for ds in demand_supply:
+        demand = ds.projected_demand_2020_21 or ds.projected_demand_2016_17
+        supply_high = ds.projected_supply_2016_17_high
+        supply_low = ds.projected_supply_2016_17_low
+
+        if demand and supply_high:
+            gap = round(demand - supply_high, 2)
+            gap_status = 'surplus' if gap <= 0 else 'deficit'
+        else:
+            gap = None
+            gap_status = 'unknown'
+
+        gap_data.append({
+            'crop_group': ds.crop_group,
+            'projected_demand': demand,
+            'projected_supply_low': supply_low,
+            'projected_supply_high': supply_high,
+            'actual_production_2011_12': ds.actual_production_2011_12,
+            'gap_million_tonnes': gap,
+            'status': gap_status,
+        })
+
+    return Response({
+        'demand_supply_gaps': gap_data,
+    })
