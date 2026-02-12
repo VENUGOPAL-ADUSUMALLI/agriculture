@@ -177,6 +177,16 @@ CACHES = {
 DATA_GOV_API_KEY = os.getenv('DATA_GOV_API_KEY')
 GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+DEMAND_SUPPLY_API_URL = os.getenv(
+    'DEMAND_SUPPLY_API_URL',
+    'https://api.data.gov.in/resource/27ac86aa-0352-4c13-8711-23d4720d82ea',
+)
+CROP_PRODUCTION_API_URL = os.getenv(
+    'CROP_PRODUCTION_API_URL',
+    'https://api.data.gov.in/resource/35be999b-0208-4354-b557-f6ca9a5355de',
+)
+DATA_GOV_BATCH_SIZE = int(os.getenv('DATA_GOV_BATCH_SIZE', '246091'))
+DATA_GOV_REQUEST_DELAY = float(os.getenv('DATA_GOV_REQUEST_DELAY', '0.5'))
 
 # Login
 LOGIN_URL = '/api/v1/auth/login/'

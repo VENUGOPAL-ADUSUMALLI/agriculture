@@ -12,9 +12,16 @@ class DataGovClient:
 
     def __init__(self):
         self.api_key = settings.DATA_GOV_API_KEY
+        self.demand_supply_url = settings.DEMAND_SUPPLY_API_URL
+        self.crop_production_url = settings.CROP_PRODUCTION_API_URL
+        self.batch_size = settings.DATA_GOV_BATCH_SIZE
+        self.request_delay = settings.DATA_GOV_REQUEST_DELAY
         self.session = requests.Session()
 
     def fetch_page(self, resource_url, limit=1000, offset=0, filters=None):
+        if not self.api_key:
+            raise ValueError('DATA_GOV_API_KEY is missing in environment settings')
+
         params = {
             'api-key': self.api_key,
             'format': 'json',
@@ -70,7 +77,7 @@ class DataGovClient:
 
             yield records
 
-            offset += batch_size
+            offset += len(records)
             if offset >= total:
                 break
 
@@ -78,10 +85,13 @@ class DataGovClient:
             logger.info(f"Fetched {min(offset, total)}/{total} records")
 
     def fetch_demand_supply(self):
-        url = 'https://api.data.gov.in/resource/27ac86aa-0352-4c13-8711-23d4720d82ea'
-        result = self.fetch_page(url, limit=20)
+        result = self.fetch_page(self.demand_supply_url, limit=20)
         return result['records']
 
     def fetch_crop_production(self, filters=None):
-        url = 'https://api.data.gov.in/resource/35be999b-0208-4354-b557-f6ca9a5355de'
-        yield from self.fetch_all(url, filters=filters, batch_size=500, delay=1.0)
+        yield from self.fetch_all(
+            self.crop_production_url,
+            filters=filters,
+            batch_size=self.batch_size,
+            delay=self.request_delay,
+        )
