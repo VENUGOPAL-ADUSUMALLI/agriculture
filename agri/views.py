@@ -345,21 +345,23 @@ def predict_demand(request, crop_id):
     try:
         ai_service = OpenAIService()
         prediction = ai_service.predict_demand(
-            crop.name, state_name, historical_data, years=5)
+            crop.name, state_name, historical_data)
     except Exception as e:
+        latest_year = max((item['year'] for item in historical_data), default=timezone.now().year)
+        year_a = latest_year + 5
+        year_b = latest_year + 10
         prediction = {
-            'error': f'Prediction unavailable: {str(e)}',
-            'years_requested': 5,
-            'overall_confidence': 'low',
-            'assumptions': ['Prediction failed due to upstream AI/service error.'],
-            'forecast': [],
+            f'predicted_demand_{year_a}': 0.0,
+            f'predicted_demand_{year_b}': 0.0,
+            'trend': 'stable',
+            'confidence': 0.35,
+            'analysis': f'Fallback prediction used due to service error: {str(e)}',
         }
 
     return Response({
         'crop': CropSerializer(crop).data,
         'state': state_name,
         'historical_data': historical_data,
-        'prediction_horizon_years': 5,
         'prediction': prediction,
     })
 

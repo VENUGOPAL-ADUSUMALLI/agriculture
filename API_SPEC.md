@@ -808,7 +808,7 @@ GET /api/v1/crop-availability/?crop={crop_id}
 
 ### 3.5 AI Demand Prediction
 
-Get AI-powered demand/production predictions for a crop, optionally filtered by state.
+Get AI-powered demand predictions for a crop, optionally filtered by state.
 
 ```
 GET /api/v1/predict/{crop_id}/
@@ -848,17 +848,24 @@ GET /api/v1/predict/{crop_id}/
     { "year": 2014, "production": 12543210.0, "area": 3890250.0 }
   ],
   "prediction": {
-    "prediction_year_1": 13200000,
-    "prediction_year_2": 13650000,
-    "confidence": "medium",
-    "reasoning": "Based on the upward trend from 2000-2014 with slight fluctuations, production is expected to continue growing at approximately 2-3% annually."
+    "predicted_demand_2019": 13200000.0,
+    "predicted_demand_2024": 13650000.0,
+    "trend": "increasing",
+    "confidence": 0.72,
+    "analysis": "Rice production has shown a steady upward trend, so demand is expected to remain strong over the next decade."
   }
 }
 ```
 
 **Notes:**
-- If OpenAI is unavailable, `prediction` will contain `{"error": "Prediction unavailable: ..."}`
-- Historical data is always returned regardless of OpenAI availability
+- `prediction` always contains exactly:
+  - two dynamic keys: `predicted_demand_<yearA>` and `predicted_demand_<yearB>`
+  - `trend`, `confidence`, `analysis`
+- Dynamic year keys are derived from latest historical year:
+  - `yearA = latest_historical_year + 5`
+  - `yearB = latest_historical_year + 10`
+- If OpenAI is unavailable or returns invalid JSON, API still returns same shape using backend fallback estimates.
+- Historical data is always returned regardless of AI availability.
 - Without `state` parameter, returns aggregated all-India data
 
 ---

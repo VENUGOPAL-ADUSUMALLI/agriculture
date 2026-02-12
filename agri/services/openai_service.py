@@ -143,31 +143,30 @@ Rules:
             ],
         }
 
-    def predict_demand(self, crop_name, state_name, historical_data, years=5):
+    def predict_demand(self, crop_name, state_name, historical_data):
         latest_year = max((item.get('year', 0) for item in historical_data), default=datetime.now().year)
+        year_a = latest_year + 5
+        year_b = latest_year + 10
+        key_a = f"predicted_demand_{year_a}"
+        key_b = f"predicted_demand_{year_b}"
 
         prompt = f"""Based on this historical production data for {crop_name} in {state_name}:
 
 {json.dumps(historical_data, indent=2)}
 
-Predict expected production for the next {years} years starting from year {latest_year + 1}.
+Predict demand/procurement requirement in tonnes for years {year_a} and {year_b}.
 Return ONLY valid JSON in this exact format:
 {{
-  "overall_confidence": "<low|medium|high>",
-  "assumptions": ["string", "string"],
-  "forecast": [
-    {{
-      "year": <int>,
-      "predicted_production_tonnes": <number>,
-      "confidence": "<low|medium|high>",
-      "reasoning": "<short text>"
-    }}
-  ]
+  "{key_a}": <number>,
+  "{key_b}": <number>,
+  "trend": "<increasing|stable|decreasing>",
+  "confidence": <number between 0 and 1>,
+  "analysis": "<short paragraph>"
 }}
 Rules:
-- forecast must contain exactly {years} items.
 - No markdown.
-- No extra keys outside this JSON."""
+- No extra keys.
+- confidence must be numeric between 0 and 1."""
 
         response = self.client.chat.completions.create(
             model=self.MODEL_NAME,
@@ -175,53 +174,55 @@ Rules:
                 {"role": "system", "content": "You are an agricultural data scientist. Return only valid JSON."},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=700,
+            max_tokens=400,
             temperature=0.3,
         )
 
         content = response.choices[0].message.content or ""
-        return self._normalize_forecast(content, historical_data, years, latest_year)
+        return self._normalize_legacy_prediction(
+            content=content,
+            historical_data=historical_data,
+            latest_year=latest_year,
+            year_a=year_a,
+            year_b=year_b,
+        )
 
-    def _normalize_forecast(self, content, historical_data, years, latest_year):
-        def valid_confidence(value):
-            v = str(value).strip().lower()
-            return v if v in ('low', 'medium', 'high') else 'medium'
+    def _normalize_legacy_prediction(self, content, historical_data, latest_year, year_a, year_b):
+        key_a = f"predicted_demand_{year_a}"
+        key_b = f"predicted_demand_{year_b}"
 
         try:
             parsed = self._extract_json(content)
-            forecast = parsed.get('forecast', [])
-            if not isinstance(forecast, list):
-                raise ValueError("forecast must be a list")
-
-            cleaned = []
-            for index, item in enumerate(forecast[:years]):
-                if not isinstance(item, dict):
-                    continue
-                year = int(item.get('year', latest_year + index + 1))
-                production = float(item.get('predicted_production_tonnes'))
-                cleaned.append({
-                    'year': year,
-                    'predicted_production_tonnes': round(max(0.0, production), 2),
-                    'confidence': valid_confidence(item.get('confidence', parsed.get('overall_confidence', 'medium'))),
-                    'reasoning': str(item.get('reasoning', '')).strip()[:220],
-                })
-
-            if len(cleaned) != years:
-                raise ValueError("insufficient forecast points")
-
-            cleaned = sorted(cleaned, key=lambda x: x['year'])
+            demand_a = max(0.0, float(parsed[key_a]))
+            demand_b = max(0.0, float(parsed[key_b]))
+            trend = str(parsed.get('trend', 'stable')).strip().lower()
+            if trend not in {'increasing', 'stable', 'decreasing'}:
+                trend = 'stable'
+            confidence = float(parsed.get('confidence', 0.5))
+            confidence = max(0.0, min(1.0, confidence))
+            analysis = str(parsed.get('analysis', '')).strip()[:1200]
+            if not analysis:
+                raise ValueError("analysis missing")
             return {
-                'years_requested': years,
-                'overall_confidence': valid_confidence(parsed.get('overall_confidence', 'medium')),
-                'assumptions': [str(a).strip()[:180] for a in parsed.get('assumptions', []) if str(a).strip()][:4],
-                'forecast': cleaned,
+                key_a: round(demand_a, 2),
+                key_b: round(demand_b, 2),
+                'trend': trend,
+                'confidence': round(confidence, 2),
+                'analysis': analysis,
             }
         except Exception:
-            logger.exception("Failed to parse AI demand forecast, using fallback.")
-            return self._fallback_forecast(historical_data, years, latest_year)
+            logger.exception("Failed to parse AI demand prediction, using fallback.")
+            return self._fallback_legacy_prediction(
+                historical_data=historical_data,
+                latest_year=latest_year,
+                year_a=year_a,
+                year_b=year_b,
+            )
 
     @staticmethod
-    def _fallback_forecast(historical_data, years, latest_year):
+    def _fallback_legacy_prediction(historical_data, latest_year, year_a, year_b):
+        key_a = f"predicted_demand_{year_a}"
+        key_b = f"predicted_demand_{year_b}"
         production_points = [
             float(item.get('production')) for item in historical_data
             if item.get('production') is not None
@@ -240,22 +241,26 @@ Rules:
             else:
                 growth = max(-0.15, min(0.15, (baseline - prev) / prev))
 
-        forecast = []
-        current = baseline
-        for offset in range(1, years + 1):
-            current = current * (1 + growth)
-            forecast.append({
-                'year': latest_year + offset,
-                'predicted_production_tonnes': round(max(0.0, current), 2),
-                'confidence': 'low',
-                'reasoning': 'Fallback trend estimate based on recent historical production.',
-            })
+        years_to_a = max(1, year_a - latest_year)
+        years_to_b = max(1, year_b - latest_year)
+        demand_a = baseline * ((1 + growth) ** years_to_a)
+        demand_b = baseline * ((1 + growth) ** years_to_b)
+        if growth > 0.01:
+            trend = 'increasing'
+        elif growth < -0.01:
+            trend = 'decreasing'
+        else:
+            trend = 'stable'
 
         return {
-            'years_requested': years,
-            'overall_confidence': 'low',
-            'assumptions': ['Fallback generated from historical trend due to AI response parsing failure.'],
-            'forecast': forecast,
+            key_a: round(max(0.0, demand_a), 2),
+            key_b: round(max(0.0, demand_b), 2),
+            'trend': trend,
+            'confidence': 0.35,
+            'analysis': (
+                "Fallback estimate generated from recent historical production trend "
+                "because the AI response was unavailable or invalid."
+            ),
         }
 
     def estimate_crop_price(self, crop_name, state_name):

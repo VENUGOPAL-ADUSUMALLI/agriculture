@@ -144,3 +144,94 @@ class OpenAIServiceSummaryParserTests(APITestCase):
             source_state = StateObj()
 
         return Query()
+
+
+class OpenAIServicePredictionParserTests(APITestCase):
+    def test_normalize_legacy_prediction_accepts_valid_json(self):
+        service = OpenAIService.__new__(OpenAIService)
+        latest_year = 2020
+        year_a = latest_year + 5
+        year_b = latest_year + 10
+        key_a = f'predicted_demand_{year_a}'
+        key_b = f'predicted_demand_{year_b}'
+        content = (
+            '{"' + key_a + '": 1000, "' + key_b + '": 1400, '
+            '"trend": "increasing", "confidence": 0.76, "analysis": "Rising steadily."}'
+        )
+
+        result = service._normalize_legacy_prediction(
+            content=content,
+            historical_data=[{'year': 2020, 'production': 900}],
+            latest_year=latest_year,
+            year_a=year_a,
+            year_b=year_b,
+        )
+
+        self.assertEqual(result[key_a], 1000.0)
+        self.assertEqual(result[key_b], 1400.0)
+        self.assertEqual(result['trend'], 'increasing')
+        self.assertEqual(result['confidence'], 0.76)
+
+    def test_normalize_legacy_prediction_fallback_on_invalid(self):
+        service = OpenAIService.__new__(OpenAIService)
+        latest_year = 2020
+        year_a = latest_year + 5
+        year_b = latest_year + 10
+        key_a = f'predicted_demand_{year_a}'
+        key_b = f'predicted_demand_{year_b}'
+
+        result = service._normalize_legacy_prediction(
+            content='not-json',
+            historical_data=[{'year': 2020, 'production': 900}],
+            latest_year=latest_year,
+            year_a=year_a,
+            year_b=year_b,
+        )
+
+        self.assertIn(key_a, result)
+        self.assertIn(key_b, result)
+        self.assertIn(result['trend'], ['increasing', 'stable', 'decreasing'])
+        self.assertLessEqual(result['confidence'], 1.0)
+
+
+class PredictDemandApiTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='predict_user', password='secret123')
+        self.token = Token.objects.create(user=self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {self.token.key}')
+
+        self.state = State.objects.create(name='Rajasthan')
+        self.district = District.objects.create(name='Jaipur', state=self.state)
+        self.crop = Crop.objects.create(name='Rice', group='Cereals', typical_season='Kharif')
+
+    @patch.object(OpenAIService, 'predict_demand')
+    def test_predict_endpoint_returns_legacy_shape(self, mocked_predict):
+        mocked_predict.return_value = {
+            'predicted_demand_2025': 100000.0,
+            'predicted_demand_2030': 130000.0,
+            'trend': 'increasing',
+            'confidence': 0.72,
+            'analysis': 'Demand is increasing based on historical trend.',
+        }
+
+        response = self.client.get(reverse('api_predict', args=[self.crop.id]), {'state': self.state.id})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.data.keys()), {'crop', 'state', 'historical_data', 'prediction'})
+        self.assertIn('trend', response.data['prediction'])
+        self.assertIn('confidence', response.data['prediction'])
+        self.assertIn('analysis', response.data['prediction'])
+        demand_keys = [k for k in response.data['prediction'].keys() if k.startswith('predicted_demand_')]
+        self.assertEqual(len(demand_keys), 2)
+
+    @patch.object(OpenAIService, 'predict_demand', side_effect=RuntimeError('OpenAI unavailable'))
+    def test_predict_endpoint_failure_still_returns_legacy_shape(self, mocked_predict):
+        response = self.client.get(reverse('api_predict', args=[self.crop.id]), {'state': self.state.id})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.data.keys()), {'crop', 'state', 'historical_data', 'prediction'})
+        self.assertIn('trend', response.data['prediction'])
+        self.assertIn('confidence', response.data['prediction'])
+        self.assertIn('analysis', response.data['prediction'])
+        demand_keys = [k for k in response.data['prediction'].keys() if k.startswith('predicted_demand_')]
+        self.assertEqual(len(demand_keys), 2)
