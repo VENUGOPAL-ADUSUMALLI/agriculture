@@ -6,3 +6,4 @@ python-dotenv==1.1.0
 requests==2.32.3
 openai==1.82.0
 googlemaps==4.10.0
+gunicorn==23.0.0
