@@ -87,25 +87,29 @@ class OptimizationEngine:
 
             price_per_tonne = self.get_price(crop, supplier_state)
 
-            distance_data = self.maps_service.get_distance(
-                supplier_state, None,
-                source_state, source_district,
-            )
-            distance_km = distance_data['distance_km']
-
             # Road result
             if transport_mode in ('road', 'both'):
+                road_distance_data = self.maps_service.get_distance(
+                    supplier_state, None,
+                    source_state, source_district,
+                    transport_mode='road',
+                )
                 road_result = self._create_road_result(
                     query, supplier_state, available_supply,
-                    price_per_tonne, distance_km, fulfillable,
+                    price_per_tonne, road_distance_data['distance_km'], fulfillable,
                 )
                 results.append(road_result)
 
             # Rail result
             if transport_mode in ('rail', 'both'):
+                rail_distance_data = self.maps_service.get_distance(
+                    supplier_state, None,
+                    source_state, source_district,
+                    transport_mode='rail',
+                )
                 rail_result = self._create_rail_result(
                     query, supplier_state, crop, available_supply,
-                    price_per_tonne, distance_km, fulfillable,
+                    price_per_tonne, rail_distance_data['distance_km'], fulfillable,
                 )
                 if rail_result:
                     results.append(rail_result)

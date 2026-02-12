@@ -130,6 +130,10 @@ class ProcurementQuery(models.Model):
     source_district = models.ForeignKey(District, on_delete=models.CASCADE)
     required_quantity_tonnes = models.FloatField()
     transport_mode = models.CharField(max_length=10, choices=TRANSPORT_PREF_CHOICES, default='both')
+    ai_summary_json = models.JSONField(null=True, blank=True)
+    ai_summary_generated_at = models.DateTimeField(null=True, blank=True)
+    ai_summary_model = models.CharField(max_length=100, blank=True, default='')
+    ai_summary_error = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -195,16 +199,26 @@ class RailwayFreightRate(models.Model):
 
 
 class DistanceCache(models.Model):
+    TRANSPORT_MODE_CHOICES = [
+        ('road', 'Road'),
+        ('rail', 'Rail'),
+    ]
+
     origin_state = models.ForeignKey(State, on_delete=models.CASCADE, related_name='distances_from')
     origin_district = models.ForeignKey(District, on_delete=models.CASCADE, related_name='distances_from', null=True, blank=True)
     destination_state = models.ForeignKey(State, on_delete=models.CASCADE, related_name='distances_to')
     destination_district = models.ForeignKey(District, on_delete=models.CASCADE, related_name='distances_to', null=True, blank=True)
+    transport_mode = models.CharField(max_length=10, choices=TRANSPORT_MODE_CHOICES, default='road')
     distance_km = models.FloatField()
     duration_hours = models.FloatField()
     calculated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ('origin_state', 'origin_district', 'destination_state', 'destination_district')
+        unique_together = (
+            'origin_state', 'origin_district',
+            'destination_state', 'destination_district',
+            'transport_mode',
+        )
 
     def __str__(self):
-        return f"{self.origin_state} -> {self.destination_state}: {self.distance_km}km"
+        return f"{self.origin_state} -> {self.destination_state} ({self.transport_mode}): {self.distance_km}km"

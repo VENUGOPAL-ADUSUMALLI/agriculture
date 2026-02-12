@@ -5,7 +5,10 @@ from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
+from django.db import transaction
 from django.db.models import Sum, Max, Count
+from django.utils import timezone
+import logging
 
 from agri.models import (
     State, District, Crop, CropProduction, DemandSupply,
@@ -19,6 +22,46 @@ from agri.serializers import (
 )
 from agri.services.optimization_engine import OptimizationEngine
 from agri.services.openai_service import OpenAIService
+
+logger = logging.getLogger(__name__)
+
+
+def _build_ai_summary_payload(query):
+    if not query.ai_summary_json:
+        return None
+    return {
+        'headline': query.ai_summary_json.get('headline'),
+        'points': query.ai_summary_json.get('points', []),
+        'generated_at': query.ai_summary_generated_at.isoformat() if query.ai_summary_generated_at else None,
+        'model': query.ai_summary_model or None,
+    }
+
+
+def _generate_and_store_summary(query):
+    if query.ai_summary_json:
+        return query, 'cache'
+
+    results = list(query.results.select_related('supplier_state').all()[:5])
+    if not results:
+        return query, 'unavailable'
+
+    try:
+        ai_service = OpenAIService()
+        summary = ai_service.generate_procurement_summary(query, results)
+        query.ai_summary_json = summary
+        query.ai_summary_generated_at = timezone.now()
+        query.ai_summary_model = ai_service.MODEL_NAME
+        query.ai_summary_error = ''
+        query.save(update_fields=[
+            'ai_summary_json', 'ai_summary_generated_at',
+            'ai_summary_model', 'ai_summary_error',
+        ])
+        return query, 'generated'
+    except Exception as exc:
+        logger.exception("AI summary generation failed for query_id=%s", query.id)
+        query.ai_summary_error = str(exc)[:1000]
+        query.save(update_fields=['ai_summary_error'])
+        return query, 'unavailable'
 
 
 # ─── Auth Endpoints ───────────────────────────────────────────────
@@ -201,19 +244,20 @@ def query_results(request, query_id):
             {'error': 'Query not found'}, status=status.HTTP_404_NOT_FOUND)
 
     serializer = ProcurementQuerySerializer(query)
-
-    # Generate AI summary
-    ai_summary = None
-    try:
-        ai_service = OpenAIService()
-        results = query.results.select_related('supplier_state').all()[:5]
-        if results.exists():
-            ai_summary = ai_service.generate_procurement_summary(query, results)
-    except Exception:
-        pass
+    summary_source = 'cache'
+    if not query.ai_summary_json:
+        with transaction.atomic():
+            locked_query = ProcurementQuery.objects.select_for_update().get(
+                id=query_id, user=request.user
+            )
+            locked_query, summary_source = _generate_and_store_summary(locked_query)
+            query = locked_query
+    else:
+        summary_source = 'cache'
 
     response_data = serializer.data
-    response_data['ai_summary'] = ai_summary
+    response_data['ai_summary'] = _build_ai_summary_payload(query)
+    response_data['ai_summary_source'] = summary_source if response_data['ai_summary'] else 'unavailable'
     return Response(response_data)
 
 

@@ -67,7 +67,7 @@ class ProcurementResultAdmin(admin.ModelAdmin):
 
 @admin.register(DistanceCache)
 class DistanceCacheAdmin(admin.ModelAdmin):
-    list_display = ['origin_state', 'destination_state', 'distance_km', 'duration_hours']
+    list_display = ['origin_state', 'destination_state', 'transport_mode', 'distance_km', 'duration_hours']
 
 
 @admin.register(RailwayFreightRate)
