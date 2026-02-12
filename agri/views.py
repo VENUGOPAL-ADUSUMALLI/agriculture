@@ -100,11 +100,13 @@ def logout_view(request):
 class StateViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = State.objects.all()
     serializer_class = StateSerializer
+    permission_classes = [AllowAny]
     search_fields = ['name']
 
 
 class DistrictViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = DistrictSerializer
+    permission_classes = [AllowAny]
     filterset_fields = ['state']
     search_fields = ['name']
 
@@ -169,6 +171,7 @@ def optimize_procurement(request):
         source_state=state,
         source_district=district,
         quantity_tonnes=data['quantity_tonnes'],
+        transport_mode=data.get('transport_mode', 'both'),
     )
 
     result_serializer = ProcurementQuerySerializer(query)

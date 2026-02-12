@@ -2,7 +2,7 @@ from django.contrib import admin
 from agri.models import (
     State, District, Crop, CropProduction, DemandSupply,
     CropPrice, UserProfile, ProcurementQuery, ProcurementResult,
-    DistanceCache
+    DistanceCache, RailwayFreightRate
 )
 
 
@@ -54,17 +54,23 @@ class UserProfileAdmin(admin.ModelAdmin):
 
 @admin.register(ProcurementQuery)
 class ProcurementQueryAdmin(admin.ModelAdmin):
-    list_display = ['user', 'crop', 'source_state', 'required_quantity_tonnes', 'created_at']
-    list_filter = ['created_at', 'crop']
+    list_display = ['user', 'crop', 'source_state', 'required_quantity_tonnes', 'transport_mode', 'created_at']
+    list_filter = ['created_at', 'crop', 'transport_mode']
 
 
 @admin.register(ProcurementResult)
 class ProcurementResultAdmin(admin.ModelAdmin):
-    list_display = ['query', 'supplier_state', 'total_cost', 'estimated_delivery_days',
+    list_display = ['query', 'supplier_state', 'transport_mode', 'total_cost', 'estimated_delivery_days',
                     'carbon_footprint_kg', 'ranking_category']
-    list_filter = ['ranking_category']
+    list_filter = ['ranking_category', 'transport_mode']
 
 
 @admin.register(DistanceCache)
 class DistanceCacheAdmin(admin.ModelAdmin):
     list_display = ['origin_state', 'destination_state', 'distance_km', 'duration_hours']
+
+
+@admin.register(RailwayFreightRate)
+class RailwayFreightRateAdmin(admin.ModelAdmin):
+    list_display = ['rate_class', 'min_distance_km', 'max_distance_km', 'rate_per_tonne']
+    list_filter = ['rate_class']

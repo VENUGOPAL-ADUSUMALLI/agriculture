@@ -67,7 +67,7 @@ class ProcurementResultSerializer(serializers.ModelSerializer):
             'id', 'supplier_state_name', 'available_supply_tonnes',
             'price_per_tonne', 'transportation_cost', 'total_cost',
             'distance_km', 'estimated_delivery_days', 'carbon_footprint_kg',
-            'ranking_category', 'ranking_score',
+            'transport_mode', 'ranking_category', 'ranking_score',
         ]
 
 
@@ -81,7 +81,7 @@ class ProcurementQuerySerializer(serializers.ModelSerializer):
         model = ProcurementQuery
         fields = [
             'id', 'crop_name', 'state_name', 'district_name',
-            'required_quantity_tonnes', 'created_at', 'results',
+            'required_quantity_tonnes', 'transport_mode', 'created_at', 'results',
         ]
 
 
@@ -90,6 +90,8 @@ class ProcurementRequestSerializer(serializers.Serializer):
     state_id = serializers.IntegerField()
     district_id = serializers.IntegerField()
     quantity_tonnes = serializers.FloatField(min_value=1)
+    transport_mode = serializers.ChoiceField(
+        choices=['road', 'rail', 'both'], default='both', required=False)
 
 
 class UserProfileSerializer(serializers.ModelSerializer):

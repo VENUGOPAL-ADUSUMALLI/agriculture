@@ -169,14 +169,7 @@ All reference data endpoints are read-only and support pagination, search, and f
 GET /api/v1/states/
 ```
 
-**Auth Required:** Yes
-
-**Query Parameters:**
-
-| Param    | Type   | Description                        |
-|----------|--------|------------------------------------|
-| `search` | string | Search by state name (partial match) |
-| `page`   | int    | Page number                        |
+**Auth Required:** No (public — used for registration dropdowns)
 
 **Response:** `200 OK`
 ```json
@@ -209,7 +202,7 @@ GET /api/v1/states/
 GET /api/v1/states/{id}/
 ```
 
-**Auth Required:** Yes
+**Auth Required:** No (public)
 
 **Response:** `200 OK`
 ```json
@@ -229,7 +222,7 @@ GET /api/v1/states/{id}/
 GET /api/v1/districts/
 ```
 
-**Auth Required:** Yes
+**Auth Required:** No (public — used for registration dropdowns)
 
 **Query Parameters:**
 
@@ -272,7 +265,7 @@ GET /api/v1/districts/
 GET /api/v1/districts/{id}/
 ```
 
-**Auth Required:** Yes
+**Auth Required:** No (public)
 
 **Response:** `200 OK`
 ```json
@@ -514,7 +507,7 @@ GET /api/v1/prices/
 
 ### 3.1 Optimize Procurement (Main Feature)
 
-Submit a procurement request. The system finds all supplier states for the selected crop, calculates cost/distance/delivery/carbon for each, and returns ranked recommendations.
+Submit a procurement request. The system finds all supplier states for the selected crop, calculates cost/distance/delivery/carbon for each using road and/or rail transport, and returns ranked recommendations.
 
 ```
 POST /api/v1/optimize/
@@ -530,6 +523,7 @@ POST /api/v1/optimize/
 | `state_id`       | integer | Yes      | ID of the buyer's state (from /states/)           |
 | `district_id`    | integer | Yes      | ID of the buyer's district (from /districts/)     |
 | `quantity_tonnes` | float  | Yes      | Required quantity in tonnes (min: 1)              |
+| `transport_mode` | string  | No       | `"road"`, `"rail"`, or `"both"` (default: `"both"`) |
 
 **Example Request:**
 ```json
@@ -537,7 +531,8 @@ POST /api/v1/optimize/
   "crop_id": 15,
   "state_id": 15,
   "district_id": 220,
-  "quantity_tonnes": 500
+  "quantity_tonnes": 500,
+  "transport_mode": "both"
 }
 ```
 
@@ -549,6 +544,7 @@ POST /api/v1/optimize/
   "state_name": "Telangana",
   "district_name": "Hyderabad",
   "required_quantity_tonnes": 500.0,
+  "transport_mode": "both",
   "created_at": "2026-02-11T14:30:00.000000+05:30",
   "results": [
     {
@@ -561,11 +557,26 @@ POST /api/v1/optimize/
       "distance_km": 250.0,
       "estimated_delivery_days": 1.3,
       "carbon_footprint_kg": 7750.0,
+      "transport_mode": "road",
+      "ranking_category": "fastest",
+      "ranking_score": 0.12
+    },
+    {
+      "id": 2,
+      "supplier_state_name": "Andhra Pradesh",
+      "available_supply_tonnes": 12500000.0,
+      "price_per_tonne": "23145.50",
+      "transportation_cost": "138950.00",
+      "total_cost": "11711700.00",
+      "distance_km": 250.0,
+      "estimated_delivery_days": 2.4,
+      "carbon_footprint_kg": 2750.0,
+      "transport_mode": "rail",
       "ranking_category": "best_cost",
       "ranking_score": 0.0
     },
     {
-      "id": 2,
+      "id": 3,
       "supplier_state_name": "Chhattisgarh",
       "available_supply_tonnes": 8750000.0,
       "price_per_tonne": "21980.00",
@@ -574,21 +585,23 @@ POST /api/v1/optimize/
       "distance_km": 900.0,
       "estimated_delivery_days": 1.9,
       "carbon_footprint_kg": 27900.0,
+      "transport_mode": "road",
       "ranking_category": "",
       "ranking_score": 0.35
     },
     {
-      "id": 3,
-      "supplier_state_name": "Bihar",
-      "available_supply_tonnes": 6500000.0,
-      "price_per_tonne": "22400.00",
-      "transportation_cost": "1875000.00",
-      "total_cost": "13075000.00",
-      "distance_km": 1500.0,
-      "estimated_delivery_days": 2.6,
-      "carbon_footprint_kg": 46500.0,
-      "ranking_category": "",
-      "ranking_score": 0.72
+      "id": 4,
+      "supplier_state_name": "Chhattisgarh",
+      "available_supply_tonnes": 8750000.0,
+      "price_per_tonne": "21980.00",
+      "transportation_cost": "547750.00",
+      "total_cost": "11537750.00",
+      "distance_km": 900.0,
+      "estimated_delivery_days": 3.5,
+      "carbon_footprint_kg": 9900.0,
+      "transport_mode": "rail",
+      "ranking_category": "lowest_carbon",
+      "ranking_score": 0.18
     }
   ]
 }
@@ -603,6 +616,7 @@ POST /api/v1/optimize/
 | `state_name`             | string  | Buyer's state                                       |
 | `district_name`          | string  | Buyer's district                                    |
 | `required_quantity_tonnes`| float  | Requested quantity                                  |
+| `transport_mode`         | string  | Transport preference: `road`, `rail`, or `both`     |
 | `created_at`             | datetime| Timestamp of the query                              |
 | `results`                | array   | Array of ranked procurement options (see below)     |
 
@@ -613,11 +627,12 @@ POST /api/v1/optimize/
 | `supplier_state_name`    | string  | —        | Name of the supplier state                               |
 | `available_supply_tonnes`| float   | tonnes   | Total production available in that state                 |
 | `price_per_tonne`        | decimal | INR      | Crop price per tonne in the supplier state               |
-| `transportation_cost`    | decimal | INR      | Transport cost = distance x INR 2.50/km/tonne x quantity|
-| `total_cost`             | decimal | INR      | (price x quantity) + transportation_cost                 |
+| `transportation_cost`    | decimal | INR      | Road: distance × ₹2.50/km/tonne × qty. Rail: slab rate × qty |
+| `total_cost`             | decimal | INR      | (price × quantity) + transportation_cost                 |
 | `distance_km`            | float   | km       | Road distance from supplier to buyer (Google Maps)       |
-| `estimated_delivery_days`| float   | days     | (distance/40 kmph + 24h loading) / 24                    |
-| `carbon_footprint_kg`    | float   | kg CO2   | distance x quantity x 0.062 kg CO2/tonne-km              |
+| `estimated_delivery_days`| float   | days     | Road: (dist/40 + 24h)/24. Rail: (dist/25 + 48h)/24      |
+| `carbon_footprint_kg`    | float   | kg CO2   | Road: dist × qty × 0.062. Rail: dist × qty × 0.022      |
+| `transport_mode`         | string  | —        | `road` or `rail`                                         |
 | `ranking_category`       | string  | —        | `best_cost`, `fastest`, `lowest_carbon`, or empty        |
 | `ranking_score`          | float   | 0-1      | Weighted score: 50% cost + 25% delivery + 25% carbon. Lower is better |
 
@@ -707,6 +722,7 @@ GET /api/v1/history/
     "state_name": "Maharashtra",
     "district_name": "Pune",
     "required_quantity_tonnes": 1000.0,
+    "transport_mode": "both",
     "created_at": "2026-02-11T16:00:00.000000+05:30",
     "results": [...]
   },
@@ -716,6 +732,7 @@ GET /api/v1/history/
     "state_name": "Telangana",
     "district_name": "Hyderabad",
     "required_quantity_tonnes": 500.0,
+    "transport_mode": "rail",
     "created_at": "2026-02-11T14:30:00.000000+05:30",
     "results": [...]
   }
@@ -906,15 +923,51 @@ Step 8: GET  /api/v1/impact/             → View cumulative savings dashboard
 
 ## 5. FORMULAS USED IN OPTIMIZATION
 
-| Calculation            | Formula                                                    |
-|------------------------|------------------------------------------------------------|
-| **Transport Cost**     | `distance_km × 2.50 INR/km/tonne × quantity_tonnes`       |
-| **Total Cost**         | `(price_per_tonne × quantity) + transport_cost`            |
-| **Delivery Time**      | `(distance_km / 40 km/h + 24 hours) / 24` → days          |
-| **Carbon Footprint**   | `distance_km × quantity_tonnes × 0.062 kg CO2/tonne-km`   |
-| **Ranking Score**      | `0.50 × norm(cost) + 0.25 × norm(delivery) + 0.25 × norm(carbon)` |
+### 5.1 Road Transport
 
-Lower ranking score = better overall option.
+| Calculation            | Formula                                                              |
+|------------------------|----------------------------------------------------------------------|
+| **Transport Cost**     | distance_km × 2.50 INR/km/tonne × quantity_tonnes                   |
+| **Total Cost**         | (price_per_tonne × quantity) + transport_cost                        |
+| **Delivery Time**      | (distance_km / 40 km/h + 24 hours) / 24 → days                      |
+| **Carbon Footprint**   | distance_km × quantity_tonnes × 0.062 kg CO2/tonne-km               |
+
+### 5.2 Railway Transport
+
+| Calculation            | Formula                                                              |
+|------------------------|----------------------------------------------------------------------|
+| **Transport Cost**     | slab_rate_per_tonne × quantity_tonnes (slab-based, NOT per-km)       |
+| **Total Cost**         | (price_per_tonne × quantity) + rail_transport_cost                   |
+| **Delivery Time**      | (distance_km / 25 km/h + 48 hours) / 24 → days                      |
+| **Carbon Footprint**   | distance_km × quantity_tonnes × 0.022 kg CO2/tonne-km               |
+
+### 5.3 Railway Rate Classes
+
+| Rate Class | Description                        | When Used                          |
+|------------|------------------------------------|------------------------------------|
+| **130A**   | Train Load – Food Grains           | All crops except Turmeric, ≥2400T  |
+| **130B**   | Wagon Load – Food Grains           | All crops except Turmeric, <2400T  |
+| **LR3**    | Train Load – Spices/Sugar          | Turmeric only, ≥2400T             |
+| **LR3W**   | Wagon Load – Spices/Sugar          | Turmeric only, <2400T             |
+
+Railway rates are **GST Exempted** and based on **48 distance slabs** (1–3500 km) per class.
+
+### 5.4 Shared Ranking Formula
+
+| Calculation            | Formula                                                              |
+|------------------------|----------------------------------------------------------------------|
+| **Ranking Score**      | 0.50 × norm(cost) + 0.25 × norm(delivery) + 0.25 × norm(carbon)     |
+
+Lower ranking score = better overall option. Ranking is applied across **all results** (road + rail mixed).
+
+### 5.5 Road vs Rail Comparison (Example: 650 km, 500 tonnes, Paddy)
+
+| Factor           | Road                              | Rail (130B Wagon Load)            |
+|------------------|-----------------------------------|-----------------------------------|
+| Transport cost   | ₹8.12L (650 × 2.50 × 500)        | ₹4.32L (₹864.5/T × 500)         |
+| Delivery time    | 1.7 days (faster)                 | 3.1 days (slower)                |
+| Carbon footprint | 20,150 kg CO2                     | 7,150 kg CO2 (65% less)          |
+| Best for         | **Speed**                         | **Cost & Environment**            |
 
 ---
 

@@ -118,11 +118,18 @@ class UserProfile(models.Model):
 
 
 class ProcurementQuery(models.Model):
+    TRANSPORT_PREF_CHOICES = [
+        ('road', 'Road Only'),
+        ('rail', 'Rail Only'),
+        ('both', 'Both Road & Rail'),
+    ]
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='queries')
     crop = models.ForeignKey(Crop, on_delete=models.CASCADE)
     source_state = models.ForeignKey(State, on_delete=models.CASCADE, related_name='procurement_queries')
     source_district = models.ForeignKey(District, on_delete=models.CASCADE)
     required_quantity_tonnes = models.FloatField()
+    transport_mode = models.CharField(max_length=10, choices=TRANSPORT_PREF_CHOICES, default='both')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -139,6 +146,10 @@ class ProcurementResult(models.Model):
         ('fastest', 'Fastest Delivery'),
         ('lowest_carbon', 'Lowest Carbon'),
     ]
+    TRANSPORT_MODE_CHOICES = [
+        ('road', 'Road'),
+        ('rail', 'Rail'),
+    ]
 
     query = models.ForeignKey(ProcurementQuery, on_delete=models.CASCADE, related_name='results')
     supplier_state = models.ForeignKey(State, on_delete=models.CASCADE)
@@ -150,6 +161,7 @@ class ProcurementResult(models.Model):
     distance_km = models.FloatField()
     estimated_delivery_days = models.FloatField()
     carbon_footprint_kg = models.FloatField(help_text="CO2 equivalent in kg")
+    transport_mode = models.CharField(max_length=10, choices=TRANSPORT_MODE_CHOICES, default='road')
     ranking_category = models.CharField(max_length=20, choices=RANKING_CHOICES, blank=True)
     ranking_score = models.FloatField(null=True, blank=True)
 
@@ -157,7 +169,29 @@ class ProcurementResult(models.Model):
         ordering = ['total_cost']
 
     def __str__(self):
-        return f"{self.supplier_state.name} -> {self.query.source_state.name}: INR {self.total_cost}"
+        return f"{self.supplier_state.name} ({self.transport_mode}) -> {self.query.source_state.name}: INR {self.total_cost}"
+
+
+class RailwayFreightRate(models.Model):
+    RATE_CLASS_CHOICES = [
+        ('130A', 'Train Load - Food Grains (130A)'),
+        ('130B', 'Wagon Load - Food Grains (130B)'),
+        ('LR3', 'Train Load - Spices/Sugar (LR3)'),
+        ('LR3W', 'Wagon Load - Spices/Sugar (LR3W)'),
+    ]
+
+    rate_class = models.CharField(max_length=10, choices=RATE_CLASS_CHOICES)
+    min_distance_km = models.IntegerField()
+    max_distance_km = models.IntegerField()
+    rate_per_tonne = models.DecimalField(max_digits=10, decimal_places=2, help_text="INR per tonne")
+
+    class Meta:
+        unique_together = ('rate_class', 'min_distance_km', 'max_distance_km')
+        ordering = ['rate_class', 'min_distance_km']
+        verbose_name_plural = "Railway Freight Rates"
+
+    def __str__(self):
+        return f"{self.rate_class}: {self.min_distance_km}-{self.max_distance_km}km = INR {self.rate_per_tonne}/T"
 
 
 class DistanceCache(models.Model):

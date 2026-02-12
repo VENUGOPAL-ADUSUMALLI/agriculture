@@ -2,7 +2,7 @@ import logging
 from django.db.models import Sum, Max, Avg
 from agri.models import (
     State, District, Crop, CropProduction, CropPrice,
-    ProcurementQuery, ProcurementResult,
+    ProcurementQuery, ProcurementResult, RailwayFreightRate,
 )
 from agri.services.google_maps import GoogleMapsService
 from agri.services.cost_calculator import CostCalculator
@@ -62,13 +62,14 @@ class OptimizationEngine:
         return avg or 20000
 
     def optimize_procurement(self, user, crop, source_state, source_district,
-                             quantity_tonnes):
+                             quantity_tonnes, transport_mode='both'):
         query = ProcurementQuery.objects.create(
             user=user,
             crop=crop,
             source_state=source_state,
             source_district=source_district,
             required_quantity_tonnes=quantity_tonnes,
+            transport_mode=transport_mode,
         )
 
         suppliers, latest_year = self.find_suppliers(crop, exclude_state=source_state)
@@ -92,30 +93,83 @@ class OptimizationEngine:
             )
             distance_km = distance_data['distance_km']
 
-            transport_cost = self.cost_calc.calculate_transportation_cost(
-                distance_km, fulfillable)
-            total_cost = self.cost_calc.calculate_total_cost(
-                price_per_tonne, fulfillable, transport_cost)
-            delivery_days = self.cost_calc.calculate_delivery_time_days(distance_km)
-            carbon_kg = self.cost_calc.calculate_carbon_footprint(
-                distance_km, fulfillable)
+            # Road result
+            if transport_mode in ('road', 'both'):
+                road_result = self._create_road_result(
+                    query, supplier_state, available_supply,
+                    price_per_tonne, distance_km, fulfillable,
+                )
+                results.append(road_result)
 
-            result = ProcurementResult.objects.create(
-                query=query,
-                supplier_state=supplier_state,
-                available_supply_tonnes=available_supply,
-                price_per_tonne=price_per_tonne,
-                transportation_cost=transport_cost,
-                total_cost=total_cost,
-                distance_km=distance_km,
-                estimated_delivery_days=delivery_days,
-                carbon_footprint_kg=carbon_kg,
-            )
-            results.append(result)
+            # Rail result
+            if transport_mode in ('rail', 'both'):
+                rail_result = self._create_rail_result(
+                    query, supplier_state, crop, available_supply,
+                    price_per_tonne, distance_km, fulfillable,
+                )
+                if rail_result:
+                    results.append(rail_result)
 
         self._rank_results(results)
 
         return query
+
+    def _create_road_result(self, query, supplier_state, available_supply,
+                            price_per_tonne, distance_km, quantity_tonnes):
+        transport_cost = self.cost_calc.calculate_transportation_cost(
+            distance_km, quantity_tonnes)
+        total_cost = self.cost_calc.calculate_total_cost(
+            price_per_tonne, quantity_tonnes, transport_cost)
+        delivery_days = self.cost_calc.calculate_delivery_time_days(distance_km)
+        carbon_kg = self.cost_calc.calculate_carbon_footprint(
+            distance_km, quantity_tonnes, mode='road')
+
+        return ProcurementResult.objects.create(
+            query=query,
+            supplier_state=supplier_state,
+            available_supply_tonnes=available_supply,
+            price_per_tonne=price_per_tonne,
+            transportation_cost=transport_cost,
+            total_cost=total_cost,
+            distance_km=distance_km,
+            estimated_delivery_days=delivery_days,
+            carbon_footprint_kg=carbon_kg,
+            transport_mode='road',
+        )
+
+    def _create_rail_result(self, query, supplier_state, crop, available_supply,
+                            price_per_tonne, distance_km, quantity_tonnes):
+        rate_class = self.cost_calc.get_railway_rate_class(crop, quantity_tonnes)
+
+        slab = RailwayFreightRate.objects.filter(
+            rate_class=rate_class,
+            min_distance_km__lte=distance_km,
+            max_distance_km__gte=distance_km,
+        ).first()
+
+        if not slab:
+            return None  # Distance outside railway slab range (>3500 km)
+
+        rail_transport_cost = self.cost_calc.calculate_railway_cost(
+            distance_km, quantity_tonnes, slab.rate_per_tonne)
+        total_cost = self.cost_calc.calculate_total_cost(
+            price_per_tonne, quantity_tonnes, rail_transport_cost)
+        delivery_days = self.cost_calc.calculate_railway_delivery_days(distance_km)
+        carbon_kg = self.cost_calc.calculate_carbon_footprint(
+            distance_km, quantity_tonnes, mode='rail')
+
+        return ProcurementResult.objects.create(
+            query=query,
+            supplier_state=supplier_state,
+            available_supply_tonnes=available_supply,
+            price_per_tonne=price_per_tonne,
+            transportation_cost=rail_transport_cost,
+            total_cost=total_cost,
+            distance_km=distance_km,
+            estimated_delivery_days=delivery_days,
+            carbon_footprint_kg=carbon_kg,
+            transport_mode='rail',
+        )
 
     def _rank_results(self, results):
         if not results:

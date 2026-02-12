@@ -19,6 +19,9 @@ media/
 # Environment variables
 .env
 
+# Google credentials
+google-hack.json
+
 # IDE
 .vscode/
 .idea/
