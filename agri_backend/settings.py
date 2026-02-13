@@ -12,6 +12,8 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 import os
 from pathlib import Path
+
+import dj_database_url
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -30,7 +32,7 @@ SECRET_KEY = os.getenv(
 
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = ['.vercel.app', "*"]
 
 
 # Application definition
@@ -87,11 +89,19 @@ WSGI_APPLICATION = 'agri_backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': BASE_DIR / 'db.sqlite3',
+#     }
+# }
+
+
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    'default': dj_database_url.config(
+        default=os.getenv('DATABASE_URL'),
+        conn_max_age=600
+    )
 }
 
 
@@ -186,7 +196,7 @@ CROP_PRODUCTION_API_URL = os.getenv(
     'CROP_PRODUCTION_API_URL',
     'https://api.data.gov.in/resource/35be999b-0208-4354-b557-f6ca9a5355de',
 )
-DATA_GOV_BATCH_SIZE = int(os.getenv('DATA_GOV_BATCH_SIZE', '246091'))
+DATA_GOV_BATCH_SIZE = int(os.getenv('DATA_GOV_BATCH_SIZE', '1000'))
 DATA_GOV_REQUEST_DELAY = float(os.getenv('DATA_GOV_REQUEST_DELAY', '0.5'))
 
 # Login
